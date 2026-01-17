@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>丸太検知v1.4</title>
+    <title>丸太検知v1.5</title>
     
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#8b4513">
@@ -71,7 +71,7 @@
 
 <div class="card">
     <div class="header-area">
-        <h2 id="formTitle">丸太検知v1.4</h2>
+        <h2 id="formTitle">丸太検知v1.5</h2>
         <button class="settings-btn" onclick="openSettings()">⚙️ 設定</button>
     </div>
 
@@ -182,13 +182,13 @@
     window.onload = function() {
         loadSettings();
         renderTable();
-        // ボイスのロード待機
+        
+        // iOS/Androidでのボイス一覧取得タイミング対策
         if ('speechSynthesis' in window) {
-            window.speechSynthesis.onvoiceschanged = () => {
-                availableVoices = window.speechSynthesis.getVoices();
-            };
-            // 初回取得
-            availableVoices = window.speechSynthesis.getVoices();
+            const loadVoices = () => { availableVoices = window.speechSynthesis.getVoices(); };
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+            // 念のため少し待ってから取得
+            setTimeout(loadVoices, 1000);
         }
     };
 
@@ -297,67 +297,72 @@
             document.getElementById('voiceStatus').innerText = "認識中: " + lastText;
             processVoiceCommand(lastText.toLowerCase());
         };
+        
         recognition.onend = () => { if (isListening) recognition.start(); };
+        
         recognition.onerror = (event) => {
-            if(event.error === 'network') {
-                alert("ネットワークエラー：オンライン時のみ利用可能です");
-                toggleVoice(); // 停止
+            console.log("Voice Error:", event.error);
+            // ネットワークエラー等の場合、ボタン状態をリセットする
+            if(event.error === 'network' || event.error === 'not-allowed' || event.error === 'aborted') {
+                if(isListening) {
+                    toggleVoiceUI(false); // UI強制停止
+                }
             }
         };
     }
 
-    function toggleVoice() {
-        // --- Android向け：オフラインチェック ---
-        if (!navigator.onLine) {
-            alert("現在オフラインです。\n音声認識はインターネット接続が必要です。");
-            return;
-        }
-
-        if (!recognition) return alert("音声認識非対応です");
+    function toggleVoiceUI(active) {
         const btn = document.getElementById('voiceBtn');
         const status = document.getElementById('voiceStatus');
-        
-        if (!isListening) {
-            // iOS対策：開始時に「開始」と喋らせる
-            speakText("開始"); 
-            
-            recognition.start();
-            isListening = true;
+        isListening = active;
+        if (active) {
             btn.innerText = "音声入力停止";
             status.classList.add('listening');
         } else {
-            isListening = false;
-            recognition.stop();
             btn.innerText = "音声入力開始";
             status.innerText = "音声入力：オフ";
             status.classList.remove('listening');
+            if(recognition) recognition.stop();
         }
     }
 
-    // --- 改良版: ボイス選択ロジック ---
+    function toggleVoice() {
+        if (!recognition) return alert("音声認識非対応です");
+        
+        if (!isListening) {
+            // ★重要：先にマイクを開始する（iOS対策）
+            try {
+                recognition.start();
+                toggleVoiceUI(true);
+                // マイク起動後に発話
+                setTimeout(() => speakText("開始"), 100);
+            } catch (e) {
+                console.error(e);
+                toggleVoiceUI(false);
+            }
+        } else {
+            toggleVoiceUI(false);
+        }
+    }
+
     function speakText(text) {
         if ('speechSynthesis' in window) {
+            // 発話中のものをキャンセル
             window.speechSynthesis.cancel();
             
             const uttr = new SpeechSynthesisUtterance(text);
             uttr.lang = "ja-JP";
             uttr.rate = 1.2;
             
-            // ボイスリストが空なら再取得を試みる
             if(availableVoices.length === 0) {
                 availableVoices = window.speechSynthesis.getVoices();
             }
 
-            // iOSオフライン対策：
-            // 日本語ボイスの中で、できればローカル(localService=true)を優先して探す
+            // iOSオフライン対策：ローカルボイスを優先
             let targetVoice = availableVoices.find(v => v.lang === 'ja-JP' && v.localService === true);
-            
-            // ローカル指定で見つからなければ、単にja-JPを探す
             if (!targetVoice) {
                 targetVoice = availableVoices.find(v => v.lang === 'ja-JP');
             }
-
-            // ボイスが見つかればセットする（これをしないとiOSは通信しようとする場合がある）
             if (targetVoice) {
                 uttr.voice = targetVoice;
             }
@@ -392,4 +397,152 @@
             }
             if (targetType) {
                 document.getElementById('treeType').value = targetType;
-                speakText
+                speakText(targetType);
+                matched = true;
+            }
+        } 
+        
+        if (!matched && (text.includes("直径") || text.includes("ちょっけい"))) {
+            const n = getNum(text); 
+            if(n) {
+                document.getElementById('diameter').value = n;
+                updateVolume();
+                speakText(n + "センチ");
+            }
+        }
+        else if (!matched && (text.includes("長さ") || text.includes("ながさ") || text.includes("高さ") || text.includes("たかさ"))) {
+            const n = getNum(text); 
+            if(n) {
+                document.getElementById('length').value = n;
+                updateVolume();
+                speakText(n + "メートル");
+            }
+        }
+        else if (!matched && (text.includes("メモ") || text.includes("めも"))) {
+            let val = text.replace(/メモ|めも/, "").trim();
+            document.getElementById('memo').value = val;
+            speakText("メモ " + val);
+        }
+    }
+
+    function handleSave() {
+        var treeType = document.getElementById('treeType').value;
+        var length = document.getElementById('length').value;
+        var diameter = document.getElementById('diameter').value;
+        var volume = document.getElementById('volume').value;
+        var memo = document.getElementById('memo').value;
+        var editId = document.getElementById('editId').value;
+
+        if(!length || !diameter) {
+            alert("入力不足（材長・末口直径）");
+            return;
+        }
+
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        var record = {
+            treeType: treeType,
+            length: length,
+            diameter: diameter,
+            volume: volume,
+            memo: memo,
+            id: editId ? editId : String(Date.now())
+        };
+
+        if (editId) {
+            var index = list.findIndex(item => String(item.id) === String(editId));
+            if (index !== -1) list[index] = record;
+        } else {
+            list.unshift(record);
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+        resetForm(true); 
+        renderTable();
+    }
+
+    function renderTable() {
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        var tbody = document.getElementById('tableBody');
+        var totalV = 0;
+        tbody.innerHTML = '';
+        list.forEach(item => {
+            var v = parseFloat(item.volume) || 0;
+            totalV += v;
+            var row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${item.treeType}</td>
+                <td>${item.length}</td>
+                <td>${item.diameter}</td>
+                <td>${v.toFixed(3)}</td>
+                <td>${item.memo || ''}</td>
+                <td class="action-btns">
+                    <button class="edit-btn" onclick="startEdit('${item.id}')">修正</button>
+                    <button class="del-btn" onclick="handleDelete('${item.id}')">削除</button>
+                </td>`;
+            tbody.appendChild(row);
+        });
+        document.getElementById('totalCount').innerText = list.length;
+        document.getElementById('totalVolume').innerText = totalV.toFixed(3);
+    }
+
+    function startEdit(id) {
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        var target = list.find(item => String(item.id) === String(id));
+        if(target) {
+            document.getElementById('editId').value = target.id;
+            document.getElementById('treeType').value = target.treeType;
+            document.getElementById('length').value = target.length;
+            document.getElementById('diameter').value = target.diameter;
+            document.getElementById('memo').value = target.memo || '';
+            updateVolume();
+            document.getElementById('formTitle').innerText = "【修正中】";
+            document.getElementById('saveBtn').innerText = "更新";
+            document.getElementById('cancelBtn').style.display = "inline-block";
+            window.scrollTo(0,0);
+        }
+    }
+
+    function handleDelete(id) {
+        if(!confirm("削除しますか？")) return;
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        var newList = list.filter(item => String(item.id) !== String(id));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(newList));
+        renderTable();
+    }
+
+    function handleAllClear() {
+        if(!confirm("全データを消去しますか？")) return;
+        localStorage.removeItem(STORAGE_KEY);
+        renderTable();
+    }
+
+    function resetForm(keepLength = false) {
+        document.getElementById('editId').value = "";
+        document.getElementById('diameter').value = "";
+        document.getElementById('volume').value = "";
+        document.getElementById('memo').value = "";
+        if (!keepLength) document.getElementById('length').value = "4";
+        document.getElementById('formTitle').innerText = "丸太検知v1.5 (安定化版)";
+        document.getElementById('saveBtn').innerText = "保存";
+        document.getElementById('cancelBtn').style.display = "none";
+    }
+
+    function handleExport() {
+        var list = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        if(list.length === 0) { alert("データがありません"); return; }
+        var csv = "\ufeff樹種,材長(m),末口直径(cm),素材材積(m3),備考\n";
+        list.forEach(item => {
+            csv += `${item.treeType},${item.length},${item.diameter},${item.volume},${(item.memo || "").replace(/,/g, " ")}\n`;
+        });
+        var blob = new Blob([csv], { type: 'text/csv' });
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        var now = new Date();
+        var dateStr = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
+        a.href = url;
+        a.download = "丸太検知データ_" + dateStr + ".csv";
+        a.click();
+        setTimeout(() => window.URL.revokeObjectURL(url), 100);
+    }
+</script>
+</body>
+</html>
